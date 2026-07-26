@@ -1,0 +1,29 @@
+#!/bin/sh
+# Pre-commit gate: format, lint, test. Install with:
+#   git config core.hooksPath .githooks
+set -e
+
+echo "pre-commit: cargo fmt --check"
+cargo fmt --all -- --check
+
+echo "pre-commit: cargo clippy -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
+
+# The device layers and elevation paths are cfg-gated, so a host-only clippy
+# run never sees the other two platforms' code. Lint every cross target the
+# toolchain has installed:
+#   rustup target add x86_64-unknown-linux-gnu aarch64-apple-darwin \
+#                     x86_64-pc-windows-msvc
+if command -v rustup >/dev/null 2>&1; then
+    host=$(rustc -vV | sed -n 's/^host: //p')
+    for target in $(rustup target list --installed); do
+        [ "$target" = "$host" ] && continue
+        echo "pre-commit: cargo clippy --target $target"
+        cargo clippy --workspace --all-targets --target "$target" -- -D warnings
+    done
+fi
+
+echo "pre-commit: cargo test"
+cargo test --workspace --quiet
+
+echo "pre-commit: OK"

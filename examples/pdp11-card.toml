@@ -1,0 +1,82 @@
+# Example card layout: RL02 packs, RX02 floppies, RP06 packs, and magtapes,
+# with an on-card TOC in a gap between banks. Bank bases are aligned to each
+# bank's power-of-two span so slot addressing in the FPGA is pure
+# OR-concatenation (e.g. the rp bank spans 2 GiB, so it sits on a 2 GiB
+# boundary). Full layout ends at 8 GiB — any 16 GB card fits.
+#
+#   sdslot write --device \\.\PhysicalDrive2 --manifest examples/pdp11-card.toml
+#   sdslot export-rtl --manifest examples/pdp11-card.toml -o card_layout.vh
+#   sdslot image --manifest examples/pdp11-card.toml -o card.img
+
+sector_size = 512
+toc = "512MiB"
+
+[[bank]]
+name       = "rl"
+base       = "0"           # bytes, KiB/MiB/GiB suffixes, or "NNNs" for LBAs
+slot_size  = "16MiB"
+units      = 16            # capacity of the bank; the controller may use fewer
+drive_type = "RL02"        # default type for validation and --length canonical
+
+  [[bank.slot]]
+  unit  = 0
+  name  = "xxdp-rl02"
+  image = "images/xxdp25.rl02"
+
+  [[bank.slot]]
+  unit  = 1
+  name  = "rt11-work"
+  image = "images/rt11work.rl02"
+
+# Floppies: 4 MiB slots fit every DEC floppy — RX01 (256,256 B), RX02
+# (512,512 B; physical media records track 0 single-density but flat images
+# are uniform), RX50 (409,600 B), RX33 (1.2 MB), RX23 (1.44 MB), and RX26
+# (2.88 MB). drive_type RX02 is just the default for validation and
+# --length canonical. Span 16 x 4 MiB = 64 MiB, based right after the rl
+# bank (256 MiB is 64 MiB-aligned).
+[[bank]]
+name       = "rx"
+base       = "256MiB"
+slot_size  = "4MiB"
+units      = 16
+drive_type = "RX02"
+
+# Magtapes (.tap images). Slot size covers the largest period tape:
+#   TM02/TM03 + TU16/TU45/TU77: 2400 ft @ 1600 BPI = 46,080,000 B (~44 MiB)
+#     absolute ceiling — inter-record gaps only lower it, and .tap adds just
+#     8 B/record of container overhead.
+#   TK50 CompacTape:     ~94.5 MB
+#   TK70 CompacTape II:  ~296 MB  -> 512 MiB slots cover everything.
+# .tap images are variable-length, so no drive_type: extraction defaults to
+# the byte length recorded in the TOC (--length toc).
+[[bank]]
+name       = "tm"
+base       = "4GiB"        # aligned to the bank's 8 x 512 MiB = 4 GiB span
+slot_size  = "512MiB"
+units      = 8
+
+[[bank]]
+name       = "rp"
+base       = "2GiB"        # aligned to the bank's 2 GiB span
+slot_size  = "256MiB"
+units      = 8
+drive_type = "RP06"
+
+  [[bank.slot]]
+  unit  = 0
+  name  = "rsx11mplus-v4.6"
+  image = "images/rsx11mp46.dsk"
+
+  [[bank.slot]]
+  unit  = 7
+  name  = "211bsd"
+  image = "images/211bsd_rp06.dsk"
+
+# Drive types not built in can be added (or builtins overridden):
+#
+# [drive_types.RK07]
+# cylinders        = 815
+# heads            = 3
+# sectors          = 22
+# bytes_per_sector = 512
+# recommended_slot = "32MiB"

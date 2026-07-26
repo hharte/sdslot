@@ -1,0 +1,29 @@
+[package]
+name = "sdslot-gui"
+description = "GUI frontend for sdslot; drives the CLI as a subprocess and performs no raw I/O itself"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords = ["sd-card", "disk-image", "fpga", "gui", "retrocomputing"]
+categories = ["emulators", "hardware-support", "gui"]
+
+[dependencies]
+sdslot-core = { path = "../sdslot-core", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+eframe.workspace = true
+egui_extras.workspace = true
+rfd.workspace = true
+notify.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[[bin]]
+name = "sdslot-gui"
+path = "src/main.rs"

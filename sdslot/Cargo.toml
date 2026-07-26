@@ -1,0 +1,21 @@
+[package]
+name = "sdslot"
+description = "Write vintage disk images to SD cards at fixed LBA offsets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords = ["sd-card", "disk-image", "fpga", "pdp-11", "retrocomputing"]
+categories = ["command-line-utilities", "emulators", "hardware-support"]
+
+[dependencies]
+sdslot-core = { path = "../sdslot-core", version = "0.1.0" }
+clap.workspace = true
+serde_json.workspace = true
+indicatif.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

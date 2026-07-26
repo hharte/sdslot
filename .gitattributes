@@ -1,0 +1,8 @@
+# Normalize line endings to LF in the repo AND the working tree on every
+# platform (Windows, macOS, Linux). This keeps endings consistent and stops
+# Git from warning about CRLF/LF conversion regardless of each user's
+# core.autocrlf setting. LF is handled natively by modern Windows tooling
+# (VS Code, Visual Studio, the Rust toolchain) and is required for the
+# /bin/sh git hooks.
+* text=auto eol=lf
+*.ttf -text
