@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>sdslot</string>
+	<key>CFBundleDisplayName</key>
+	<string>sdslot</string>
+	<key>CFBundleExecutable</key>
+	<string>sdslot-gui</string>
+	<!-- Stable across releases: TCC keys its Full Disk Access grant by
+	     bundle identifier (plus code signature), so changing this throws
+	     away every user's existing authorization. -->
+	<key>CFBundleIdentifier</key>
+	<string>com.magicandroidapps.sdslot</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>CFBundleIconFile</key>
+	<string>sdslot</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<!-- Shown in the macOS consent prompt when an operation first touches a
+	     removable volume. Full Disk Access is still required for the raw
+	     /dev/rdiskN character device; see README "macOS: Full Disk Access". -->
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>sdslot needs access to removable media to write and extract disk images on your SD card.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright (c) 2026 Howard M. Harte — MIT OR Apache-2.0</string>
+</dict>
+</plist>

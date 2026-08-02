@@ -147,6 +147,12 @@ pub enum Event {
     Error {
         message: String,
     },
+    /// A human-readable side note that is not a slot outcome or an error —
+    /// e.g. the post-write eject result. Additive in schema v2: an older
+    /// consumer drops the unknown line harmlessly.
+    Note {
+        message: String,
+    },
 }
 
 /// Receives events as an operation proceeds.
@@ -230,6 +236,20 @@ mod tests {
         counting.emit(&ev);
         counting.emit(&ev);
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn note_event_round_trips() {
+        let ev = Event::Note {
+            message: "ejected".into(),
+        };
+        let line = serde_json::to_string(&ev).unwrap();
+        assert!(line.contains("\"event\":\"note\""));
+        let back: Event = serde_json::from_str(&line).unwrap();
+        match back {
+            Event::Note { message } => assert_eq!(message, "ejected"),
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]

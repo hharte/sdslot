@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! sdslot CLI (design §3): list, status, write, read, wipe, verify,
+//! sdslot CLI (design §3): list, status, write, read, wipe, verify, eject,
 //! export-rtl, plus `image` for assembling a dd/balenaEtcher-writable flat
 //! card image. Exit codes: 0 success, 1 usage/validation, 2 device access,
 //! 3 verify mismatch.
+//!
+//! All raw-device work happens in `sdslot-core`; nothing here needs `unsafe`.
+#![forbid(unsafe_code)]
 
 mod sink;
 
@@ -97,6 +100,10 @@ enum Cmd {
         /// Allow non-removable devices (the system disk is always refused)
         #[arg(long)]
         force: bool,
+        /// Eject the device after a successful write (and verify), so the
+        /// card can be pulled safely
+        #[arg(long)]
+        eject: bool,
         #[command(flatten)]
         engine: EngineArgs,
         #[command(flatten)]
@@ -149,6 +156,13 @@ enum Cmd {
         slot: Vec<String>,
         #[command(flatten)]
         engine: EngineArgs,
+        #[command(flatten)]
+        output: OutputArgs,
+    },
+    /// Eject removable media so the card can be pulled safely
+    Eject {
+        #[arg(long, value_name = "DEV")]
+        device: String,
         #[command(flatten)]
         output: OutputArgs,
     },
@@ -219,6 +233,7 @@ fn run(cmd: Cmd) -> Result<()> {
         | Cmd::Read { output, .. }
         | Cmd::Wipe { output, .. }
         | Cmd::Verify { output, .. }
+        | Cmd::Eject { output, .. }
         | Cmd::Image { output, .. } => (output.json, output.json_port.clone()),
         Cmd::ExportRtl { .. } => (false, None),
     };
@@ -259,6 +274,7 @@ fn dispatch(cmd: Cmd, sink: &mut Sink) -> Result<()> {
             verify,
             yes,
             force,
+            eject,
             engine,
             ..
         } => cmd_write(
@@ -268,6 +284,7 @@ fn dispatch(cmd: Cmd, sink: &mut Sink) -> Result<()> {
             verify,
             yes,
             force,
+            eject,
             &engine,
             sink,
         ),
@@ -311,6 +328,7 @@ fn dispatch(cmd: Cmd, sink: &mut Sink) -> Result<()> {
             engine,
             ..
         } => cmd_verify(&target.device, &target.manifest, &slot, &engine, sink),
+        Cmd::Eject { device, .. } => cmd_eject(&device, sink),
         Cmd::ExportRtl {
             manifest,
             out,
@@ -565,6 +583,7 @@ fn cmd_write(
     verify: bool,
     yes: bool,
     force: bool,
+    eject: bool,
     engine_args: &EngineArgs,
     sink: &mut Sink,
 ) -> Result<()> {
@@ -589,7 +608,26 @@ fn cmd_write(
     for w in session.validate_writes(&jobs, &opts)? {
         eprintln!("warning: {w}");
     }
-    session.write_slots(&jobs, &opts, sink)
+    session.write_slots(&jobs, &opts, sink)?;
+    if eject {
+        // The device must be closed first: the writing handle's locks would
+        // make the platform eject fail (and Windows can't relock volumes
+        // while they are held).
+        drop(session);
+        drop(dev);
+        let message = if !is_platform_device_path(device) {
+            format!("--eject ignored: {device} is a regular file")
+        } else {
+            // The write itself succeeded; an eject failure is a warning,
+            // not a command failure.
+            match sdslot_core::device::eject_device(device) {
+                Ok(()) => format!("{device} ejected — safe to remove"),
+                Err(e) => format!("warning: {e}"),
+            }
+        };
+        sink.emit(&Event::Note { message });
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -721,6 +759,17 @@ fn cmd_verify(
             mismatches.join(", ")
         )));
     }
+    Ok(())
+}
+
+/// Standalone eject (the GUI's Eject button). Unlike a write's `--eject`,
+/// where the write already succeeded and an eject failure is only a
+/// warning, here the eject IS the command — a failure is a real failure.
+fn cmd_eject(device: &str, sink: &mut Sink) -> Result<()> {
+    sdslot_core::device::eject_device(device)?;
+    sink.emit(&Event::Note {
+        message: format!("{device} ejected — safe to remove"),
+    });
     Ok(())
 }
 

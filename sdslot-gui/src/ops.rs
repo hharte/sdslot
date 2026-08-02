@@ -44,6 +44,14 @@ pub enum SlotUpdate {
     Outcome(SlotOutcome),
 }
 
+/// Does this slot still need a write? Only a scanned `Matches` says the card
+/// already holds the slot's image; every other state — differs, modified,
+/// wiped, unknown, or a slot the scan never reported — does not. `Written`
+/// also counts as needing one: the data landed but nothing has confirmed it.
+pub fn needs_write(state: Option<ViewState>) -> bool {
+    !matches!(state, Some(ViewState::Core(SlotState::Matches)))
+}
+
 /// "3s", "1m 05s", "2h 03m" — the progress bar's elapsed-time readout.
 pub fn format_elapsed(d: Duration) -> String {
     let total = d.as_secs();
@@ -294,6 +302,9 @@ impl OpFold {
                 ));
             }
             Event::Error { message } => lines.push(LogMsg::New(format!("error: {message}"))),
+            // Side notes (e.g. the post-write eject result) go straight to
+            // the log.
+            Event::Note { message } => lines.push(LogMsg::New(message)),
             Event::Done { ok, detail } => {
                 let mut line = (if ok { "done" } else { "failed" }).to_string();
                 if let Some(d) = detail {
@@ -320,6 +331,22 @@ mod tests {
                 Some((ViewState::Core(SlotState::Wiped), None))
             }
         }
+    }
+
+    #[test]
+    fn only_a_matching_slot_needs_no_write() {
+        assert!(!needs_write(Some(ViewState::Core(SlotState::Matches))));
+        for state in [
+            SlotState::Differs,
+            SlotState::Modified,
+            SlotState::Wiped,
+            SlotState::Unknown,
+        ] {
+            assert!(needs_write(Some(ViewState::Core(state))));
+        }
+        // Written is unconfirmed data, and an unscanned slot says nothing.
+        assert!(needs_write(Some(ViewState::Written)));
+        assert!(needs_write(None));
     }
 
     #[test]
@@ -487,6 +514,16 @@ mod tests {
             &updates[0].1,
             SlotUpdate::Outcome(SlotOutcome::Cleared)
         ));
+    }
+
+    #[test]
+    fn note_event_logs_its_message() {
+        let mut fold = OpFold::new("write");
+        let (lines, updates) = fold.apply(GuiMsg::Event(Event::Note {
+            message: "\\\\.\\PhysicalDrive2 ejected — safe to remove".into(),
+        }));
+        assert!(updates.is_empty());
+        assert!(matches!(&lines[0], LogMsg::New(l) if l.contains("ejected")));
     }
 
     #[test]

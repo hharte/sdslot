@@ -20,7 +20,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::Ioctl::{
     PropertyStandardQuery, StorageDeviceProperty, DISK_GEOMETRY_EX, FSCTL_DISMOUNT_VOLUME,
     FSCTL_LOCK_VOLUME, GET_LENGTH_INFORMATION, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
-    IOCTL_DISK_GET_LENGTH_INFO, IOCTL_STORAGE_GET_DEVICE_NUMBER, IOCTL_STORAGE_QUERY_PROPERTY,
+    IOCTL_DISK_GET_LENGTH_INFO, IOCTL_STORAGE_EJECT_MEDIA, IOCTL_STORAGE_GET_DEVICE_NUMBER,
+    IOCTL_STORAGE_MEDIA_REMOVAL, IOCTL_STORAGE_QUERY_PROPERTY, PREVENT_MEDIA_REMOVAL,
     STORAGE_DEVICE_DESCRIPTOR, STORAGE_DEVICE_NUMBER, STORAGE_PROPERTY_QUERY,
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
@@ -218,6 +219,33 @@ fn lock_volumes_on_disk(disk_number: u32) -> Result<Vec<Handle>> {
     }
     unsafe { FindVolumeClose(find) };
     Ok(locks)
+}
+
+/// Eject the media in `path` (`\\.\PhysicalDriveN`). The writing handle must
+/// already be closed: its held volume locks would make relocking here fail.
+/// Volumes are relocked and dismounted first so the eject isn't refused for
+/// files Windows reopened after the write's locks were released.
+pub fn eject(path: &str) -> Result<()> {
+    let handle = Handle::open(path, GENERIC_READ, 0).map_err(|e| classify_open_err(path, e))?;
+    let disk_number = handle
+        .device_number()
+        .map_err(|e| Error::Device(format!("{path}: cannot query device number: {e}")))?;
+    let _locks = lock_volumes_on_disk(disk_number)?;
+    // Best-effort: allow removal in case something set the prevent flag.
+    let prevent = PREVENT_MEDIA_REMOVAL {
+        PreventMediaRemoval: 0,
+    };
+    let prevent_bytes = unsafe {
+        std::slice::from_raw_parts(
+            (&prevent as *const PREVENT_MEDIA_REMOVAL) as *const u8,
+            std::mem::size_of::<PREVENT_MEDIA_REMOVAL>(),
+        )
+    };
+    let _ = handle.ioctl(IOCTL_STORAGE_MEDIA_REMOVAL, Some(prevent_bytes), None);
+    handle
+        .ioctl(IOCTL_STORAGE_EJECT_MEDIA, None, None)
+        .map_err(|e| Error::Device(format!("cannot eject {path}: {e}")))?;
+    Ok(())
 }
 
 impl RawDevice for WinDevice {

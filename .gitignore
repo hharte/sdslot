@@ -2,3 +2,4 @@
 *.img
 *.dsk
 *.rl02
+__pycache__/

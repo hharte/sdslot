@@ -203,6 +203,10 @@ impl EventSink for HumanSink {
                 }
                 eprintln!("error: {message}");
             }
+            Event::Note { message } => match &self.bar {
+                Some(bar) => bar.suspend(|| eprintln!("{message}")),
+                None => eprintln!("{message}"),
+            },
         }
     }
 }

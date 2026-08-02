@@ -231,6 +231,55 @@ fn json_without_yes_refuses_destructive_ops() {
 }
 
 #[test]
+fn eject_on_file_target_warns_but_write_succeeds() {
+    let f = Fixture::new();
+    let out = f.run(&[
+        "write",
+        "--device",
+        &f.path("card.img"),
+        "--manifest",
+        &f.path("card.toml"),
+        "--eject",
+        "--yes",
+        "--json",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines = stdout_lines(&out);
+    // The eject is skipped for a regular file, reported as a note event —
+    // the write itself still completes and reports done ok.
+    let notes = events_of(&lines, "note");
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("--eject ignored"));
+    let done = events_of(&lines, "done");
+    assert_eq!(done[0]["ok"], true);
+}
+
+#[test]
+fn standalone_eject_refuses_a_file_target() {
+    let f = Fixture::new();
+    std::fs::write(f.dir.path().join("card.img"), [0u8; 512]).unwrap();
+    // Unlike write's best-effort --eject, the standalone command has
+    // nothing else to succeed at: a non-ejectable target is a hard error.
+    let out = f.run(&["eject", "--device", &f.path("card.img"), "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    let lines = stdout_lines(&out);
+    let errors = events_of(&lines, "error");
+    assert!(errors[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("not an ejectable device"));
+    let done = events_of(&lines, "done");
+    assert_eq!(done[0]["ok"], false);
+}
+
+#[test]
 fn usage_errors_exit_1() {
     let f = Fixture::new();
     // Unknown slot reference.

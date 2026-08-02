@@ -39,20 +39,30 @@ the host.
 The card is divided into **banks**. Each bank is a contiguous region holding a
 uniform array of fixed-size **slots**, one per emulated drive unit of that bank's
 type. Different banks have different slot sizes, so small and large drive types
-coexist without wasting space:
+coexist without wasting space.
+
+The shipped [examples/pdp11-card.toml](../examples/pdp11-card.toml) lays out an
+8 GiB card this way (banks are listed here in address order; the manifest may
+declare them in any order):
 
 ```
 LBA 0x000000  ┌────────────────────────────────┐
-              │ Bank "rl"  — 512 MiB total     │
-              │   32 × 16 MiB slots            │  RL02 images (10 MiB each)
+    (0)       │ Bank "rl"  — 256 MiB           │  RL02 images (10 MiB each)
+              │   16 × 16 MiB slots            │
               │   slot n @ n × 16 MiB          │
-LBA 0x100000  ├────────────────────────────────┤
-              │ (gap — free for the TOC §2.6)  │
+LBA 0x080000  ├────────────────────────────────┤
+   (256 MiB)  │ Bank "rx"  — 64 MiB            │  RX01/02/50/33/23/26 floppies
+              │   16 × 4 MiB slots             │
+LBA 0x0a0000  ├────────────────────────────────┤
+   (320 MiB)  │ (gap — the TOC sits @ 512 MiB) │  §2.6, 128 KiB
 LBA 0x400000  ├────────────────────────────────┤
-              │ Bank "rp"  — 2 GiB @ 2 GiB     │
-              │   8 × 256 MiB slots            │  RP06 images (168 MiB each)
-              │                                │
-              └────────────────────────────────┘
+   (2 GiB)    │ Bank "rp"  — 2 GiB @ 2 GiB     │  RP06 images (166.3 MiB each)
+              │   8 × 256 MiB slots            │
+LBA 0x800000  ├────────────────────────────────┤
+   (4 GiB)    │ Bank "tm"  — 4 GiB @ 4 GiB     │  .tap magtape containers
+              │   8 × 512 MiB slots            │  (stream type — variable length)
+LBA 0x1000000 └────────────────────────────────┘
+   (8 GiB)
 ```
 
 Rules:
@@ -64,9 +74,9 @@ Rules:
   FPGA address math to pure concatenation:
   `lba = BANK_BASE | (unit << SLOT_SHIFT) | block_offset`, with no adder.
 - Banks must not overlap; slots are wholly contained in their bank.
-- A bank may reserve more slots than drives currently attached (the RL02 example
-  reserves 32 × 16 MiB slots in its 512 MiB region but the controller may only
-  implement units 0–3). Spare slots cost nothing until written.
+- A bank may reserve more slots than drives currently attached (the `rl` bank
+  above reserves 16 × 16 MiB slots but the controller may only implement units
+  0–3). Spare slots cost nothing until written.
 
 ### 2.2 Drive type registry
 
@@ -76,20 +86,28 @@ suggestions:
 
 | Type | Geometry | Canonical image size | Recommended slot |
 |---|---|---|---|
-| RX01 | 77t × 26s × 128B | 256,256 B | 512 KiB |
-| RX02 | 77t × 26s × 256B | 512,512 B | 1 MiB |
-| RX50 | 80t × 1h × 10s × 512B | 409,600 B | 512 KiB |
-| RX33 | 80t × 2h × 15s × 512B | 1,228,800 B | 2 MiB |
-| RX23 | 80t × 2h × 18s × 512B | 1,474,560 B | 2 MiB |
-| RX26 | 80t × 2h × 36s × 512B | 2,949,120 B | 4 MiB |
+| RX01 | 77c × 1h × 26s × 128B | 256,256 B | 512 KiB |
+| RX02 | 77c × 1h × 26s × 256B | 512,512 B | 1 MiB |
+| RX50 | 80c × 1h × 10s × 512B | 409,600 B | 512 KiB |
+| RX33 | 80c × 2h × 15s × 512B | 1,228,800 B | 2 MiB |
+| RX23 | 80c × 2h × 18s × 512B | 1,474,560 B | 2 MiB |
+| RX26 | 80c × 2h × 36s × 512B | 2,949,120 B | 4 MiB |
 | RL01 | 256c × 2h × 40s × 256B | 5,242,880 B (5 MiB) | 8 MiB |
 | RL02 | 512c × 2h × 40s × 256B | 10,485,760 B (10 MiB) | 16 MiB |
 | RK05 | 203c × 2h × 12s × 512B | 2,494,464 B | 4 MiB |
-| RP04/05 | 411c × 19h × 22s × 512B | ~88 MiB | 128 MiB |
-| RP06 | 815c × 19h × 22s × 512B | ~176 MiB | 256 MiB |
-| RM03 | 823c × 5h × 32s × 512B | ~67 MiB | 128 MiB |
-| RM05 | 823c × 19h × 32s × 512B | ~256 MiB | 512 MiB |
-| RP07 | 630c × 32h × 50s × 512B | 516,096,000 B | 1 GiB |
+| RP04/05 | 411c × 19h × 22s × 512B | 87,960,576 B (83.9 MiB) | 128 MiB |
+| RP06 | 815c × 19h × 22s × 512B | 174,423,040 B (166.3 MiB) | 256 MiB |
+| RM03 | 823c × 5h × 32s × 512B | 67,420,160 B (64.3 MiB) | 128 MiB |
+| RM05 | 823c × 19h × 32s × 512B | 256,196,608 B (244.3 MiB) | 512 MiB |
+| RP07 | 630c × 32h × 50s × 512B | 516,096,000 B (492.2 MiB) | 1 GiB |
+| TU16 | *stream* — no geometry | *variable* (46,080,000 B nominal) | 64 MiB |
+| TU45 | *stream* — no geometry | *variable* (46,080,000 B nominal) | 64 MiB |
+
+Sizes are exact: the byte counts above are what the registry carries and what
+`--length canonical` extracts. Beware the unit when comparing against a
+drive's advertised capacity — those figures are decimal MB, so the RP06's
+174,423,040 B reads as "174 MB" but only 166.3 MiB, and a 256 MiB slot holds
+it with room to spare.
 
 RX01/RX02 physical media record track 0 in single density by interchange
 convention; flat images are uniform streams including track 0, which is the
@@ -99,14 +117,23 @@ later floppies outgrow a 1 MiB slot: RX33 (1.2 MB), RX23 (1.44 MB), and
 RX26 (2.88 MB) need 2–4 MiB slots.
 
 Magtape banks carry `.tap` images, which are variable-length — no
-canonical size, so tape banks declare no `drive_type` and extraction uses
-the byte length recorded in the TOC (`--length toc`). Slot sizing for the
-period drives: a 2400 ft reel at 1600 BPI (the TM02/TM03 ceiling — 6250 BPI
-GCR needed the TM78) holds at most 46,080,000 bytes, inter-record gaps only
-lower that, and `.tap` container overhead (8 B/record) is far smaller than
-the gaps it replaces; a TK50 CompacTape holds ~94.5 MB and a TK70
-CompacTape II ~296 MB. 512 MiB slots therefore cover every period tape with
-power-of-two headroom (64 MiB suffices for 9-track-only layouts).
+canonical size. The registry models them as **stream** drive types
+(`stream: true`; builtin TU16/TU45): no C/H/S geometry, an `image_bytes`
+that is only the NOMINAL media capacity (display and sizing, never
+validation), no canonical-size write warning (any image that fits the slot
+is valid), and `--length canonical` refused — extraction defaults to the
+byte length recorded in the TOC (`--length toc`), falling back to the full
+slot. Manifests may add stream types via `[drive_types]` with
+`stream = true` plus `image_size` and/or `recommended_slot` (geometry is
+rejected). Slot sizing for the period drives: a 2400 ft reel at 1600 BPI
+(the TM02/TM03 ceiling — 6250 BPI GCR needed the TM78) holds at most
+46,080,000 bytes (the TU16/TU45 nominal), inter-record gaps only lower
+that, and `.tap` container overhead (8 B/record) is far smaller than the
+gaps it replaces — though a gapless `.tap` may legally exceed the nominal,
+which is why only the slot bounds it; a TK50 CompacTape holds ~94.5 MB and
+a TK70 CompacTape II ~296 MB. 512 MiB slots therefore cover every period
+tape with power-of-two headroom (64 MiB suffices for 9-track-only
+layouts).
 
 The registry is extensible via `[drive_types]` entries in the manifest for
 anything not built in. (Sizes above are indicative; the built-in registry
@@ -116,14 +143,15 @@ conventions where applicable.)
 ### 2.3 Manifest file (TOML)
 
 ```toml
-# pdp11-card.toml
+# pdp11-card.toml (abridged; the full four-bank layout is in examples/)
 sector_size = 512
+toc         = "512MiB"     # optional on-card table of contents (§2.6)
 
 [[bank]]
 name       = "rl"
 base       = "0"           # bytes, KiB/MiB/GiB suffixes, or "NNNs" for LBAs
 slot_size  = "16MiB"
-units      = 32            # capacity of the bank; controller may use fewer
+units      = 16            # capacity of the bank; controller may use fewer
 drive_type = "RL02"        # default type for validation and --length canonical
 
   [[bank.slot]]
@@ -152,6 +180,28 @@ drive_type = "RP06"
   unit  = 7
   name  = "211bsd"
   image = "images/211bsd_rp06.dsk"
+
+# A magtape bank. Omitting drive_type leaves the slots untyped (any image up
+# to slot_size is legal); naming a stream type instead — drive_type = "TU45" —
+# additionally labels the bank in the UI and RTL comments.
+[[bank]]
+name       = "tm"
+base       = "4GiB"        # aligned to the bank's 8 × 512 MiB = 4 GiB span
+slot_size  = "512MiB"
+units      = 8
+
+# Registry extensions: anything not built in, or an override of a builtin.
+[drive_types.RK07]         # a disk type — full geometry
+cylinders        = 815
+heads            = 3
+sectors          = 22
+bytes_per_sector = 512
+recommended_slot = "32MiB"
+
+[drive_types.TK50]         # a stream type — no geometry permitted
+stream           = true
+image_size       = "94500000"  # nominal only; never validated against an image
+recommended_slot = "128MiB"
 ```
 
 Slots are addressed as `bank:unit` on the command line (`--slot rl:1=foo.rl02`,
@@ -159,22 +209,48 @@ Slots are addressed as `bank:unit` on the command line (`--slot rl:1=foo.rl02`,
 
 ### 2.4 RTL export
 
-`sdslot export-rtl --manifest pdp11-card.toml -o card_layout.vh` emits per-bank
-parameters:
+`sdslot export-rtl --manifest examples/pdp11-card.toml -o card_layout.vh` emits
+per-bank parameters — verbatim output for the shipped example:
 
 ```verilog
-// Bank "rl": RL02 x 32
-localparam RL_BASE_LBA   = 32'h0000_0000;
-localparam RL_SLOT_SHIFT = 15;              // 16 MiB / 512 = 2^15 LBAs
-localparam RL_UNITS      = 6'd32;
+// Generated by sdslot export-rtl; do not edit.
+// Sector size: 512 bytes.
 
-// Bank "rp": RP06 x 8
-localparam RP_BASE_LBA   = 32'h0040_0000;   // 2 GiB / 512
-localparam RP_SLOT_SHIFT = 19;              // 256 MiB slots
+// Bank "rl": RL02 x 16, 16 MiB slots @ base 0 B
+localparam RL_BASE_LBA   = 32'h0000_0000;
+localparam RL_SLOT_SHIFT = 15;
+localparam RL_UNITS      = 5'd16;
+
+// Bank "rx": RX02 x 16, 4 MiB slots @ base 256 MiB
+localparam RX_BASE_LBA   = 32'h0008_0000;
+localparam RX_SLOT_SHIFT = 13;
+localparam RX_UNITS      = 5'd16;
+
+// Bank "tm": 8 units, 512 MiB slots @ base 4 GiB
+localparam TM_BASE_LBA   = 32'h0080_0000;
+localparam TM_SLOT_SHIFT = 20;
+localparam TM_UNITS      = 4'd8;
+
+// Bank "rp": RP06 x 8, 256 MiB slots @ base 2 GiB
+localparam RP_BASE_LBA   = 32'h0040_0000;
+localparam RP_SLOT_SHIFT = 19;
 localparam RP_UNITS      = 4'd8;
 ```
 
-Formats: Verilog header (`.vh`), SystemVerilog package, Rust, C header.
+`SLOT_SHIFT` is `log2(slot_size / sector_size)`, so `lba = BASE_LBA | (unit <<
+SLOT_SHIFT) | block_offset` needs no adder; `UNITS` is emitted at its minimum
+width (`5'd16` — five bits hold 16). Banks appear in manifest order, not
+address order. Only addressing constants are generated: which slots currently
+hold an image is host-side state that changes on every write, so the RTL is
+never regenerated for it.
+
+Formats: Verilog header (`.vh`/`.v`), SystemVerilog package (`.sv`/`.svh`,
+wrapped in `package <stem>; … endpackage`), Rust (`.rs`, `pub const`), C header
+(`.h`, `#define` with an `<STEM>_H` include guard). The format follows the
+output extension, unrecognized extensions default to `.vh`, and `--format
+vh|sv|rs|h` overrides both. The package/guard stem is the output filename's
+stem, sanitized to a legal identifier (a leading digit gets an `_` prefix).
+`-o -` writes to stdout.
 
 ### 2.5 Image size conventions
 
@@ -213,9 +289,12 @@ sdslot status  --device <dev> [--manifest layout.toml]
     Show card contents from the TOC (or slot-by-slot hash probe with manifest).
 
 sdslot write   --device <dev> --manifest layout.toml [--slot rl:1=rt11.rl02]...
-               [--verify] [--yes] [--force] [--json]
+               [--verify] [--yes] [--force] [--eject] [--json]
     Write the images named in the manifest (or per-slot overrides). Only named
-    slots are touched.
+    slots are touched. --eject ejects the device after a successful write
+    (and verify), so the card can be pulled safely; an eject failure is a
+    warning, not a command failure, and a file-backed target skips it with
+    a note.
 
 sdslot read    --device <dev> --manifest layout.toml --slot rp:7 -o out.dsk
                [--length <bytes|canonical|toc|slot>] [--json]
@@ -228,6 +307,11 @@ sdslot wipe    --device <dev> --manifest layout.toml --slot rl:3 [--yes]
 
 sdslot verify  --device <dev> --manifest layout.toml [--slot B:N]... [--json]
     Re-read slots and compare against manifest images (SHA-256).
+
+sdslot eject   --device <dev> [--json]
+    Eject removable media so the card can be pulled safely (what the GUI's
+    Eject button runs). Unlike write's best-effort --eject, a failure here
+    is a command failure; a regular-file target is refused.
 
 sdslot export-rtl --manifest layout.toml -o card_layout.vh [--format vh|sv|rs|h]
 
@@ -299,13 +383,24 @@ sdslot-core (lib)
   ├── events:      the versioned progress-event schema (CLI/GUI contract)
   ├── units:       size expression parsing ("16MiB", "2048s")
   ├── error:       error type; variants map to the CLI exit codes
-  └── device:      RawDevice trait + file-backed device
+  └── device:      RawDevice trait, enumeration, eject
+        ├── file.rs     (regular-file target: growable, relaxed alignment)
+        ├── hotplug.rs  (OS hotplug notifications for the GUI)
         ├── linux.rs    (/dev/sdX, ioctls)
         ├── windows.rs  (\\.\PhysicalDriveN)
         └── macos.rs    (/dev/rdiskN, diskutil)
 
 sdslot     (bin) — CLI over sdslot-core; also the privileged backend for the GUI
+  ├── main.rs      argument parsing, per-command dispatch, plan confirmation
+  └── sink.rs      renders events as indicatif bars or line-delimited JSON
+
 sdslot-gui (bin) — GUI frontend (§8); performs no raw I/O itself
+  ├── main.rs      eframe bootstrap, CLI args, code-drawn window icon
+  ├── app.rs       the egui application: card map, slot table, log
+  ├── backend.rs   spawns the CLI (elevated when needed), parses its events
+  ├── ops.rs       in-flight operation state and aggregate progress
+  ├── devices.rs   device list, hotplug integration, safety filtering
+  └── theme.rs     the single home of everything visual (§8.2)
 ```
 
 ### 5.1 The `RawDevice` trait
@@ -339,6 +434,11 @@ pub fn open_device(path: &str, mode: AccessMode, expected_sector: u32)
     -> Result<Box<dyn RawDevice>>;
 
 pub fn enumerate_devices() -> Result<Vec<DeviceInfo>>;  // per-platform
+
+/// Eject removable media (the writing handle must be closed first):
+/// media-removal IOCTLs on Windows, CDROMEJECT on Linux (translated to
+/// SCSI START STOP UNIT for USB readers), `diskutil eject` on macOS.
+pub fn eject_device(path: &str) -> Result<()>;
 ```
 
 The engine performs all alignment, chunking, and padding so platform
@@ -387,9 +487,25 @@ bars while `--json` mode and the GUI receive structured events from the same hoo
   balenaEtcher et al.).
 - ioctls: `DKIOCGETBLOCKCOUNT`, `DKIOCGETBLOCKSIZE`.
 - Enumeration: parse `diskutil list -plist`.
+- **Elevation is necessary but not sufficient.** Raw disk devices are also
+  gated by TCC's Full Disk Access, which root does not bypass, so an
+  authenticated `open()` can still fail. The two denials are distinguishable
+  by errno and must not be reported the same way:
+  - `EACCES` (13) — the device node is `root:operator 0640`, so this is the
+    ordinary file-mode denial: the caller is not elevated. Hint: re-run with
+    `sudo`.
+  - `EPERM` (1) — the file-mode check already passed and TCC denied it above
+    the filesystem. Elevating again cannot help. Hint: grant Full Disk Access
+    to the app that launched sdslot, then relaunch that app.
 
-All platforms require elevation; EACCES-class errors produce a task-appropriate
-message ("re-run with sudo" / "run from an elevated prompt").
+  TCC attributes the request to the *responsible* process, which for a bare
+  binary is whatever terminal launched it — hence the `.app` bundle
+  (§8.4), which gives the GUI a bundle identifier and code signature that a
+  grant can attach to instead.
+
+All platforms require elevation; permission errors produce a task-appropriate
+message ("re-run with sudo" / "run from an elevated prompt" / on macOS the
+Full Disk Access instructions above).
 
 ---
 
@@ -422,7 +538,9 @@ message ("re-run with sudo" / "run from an elevated prompt").
 | `sha2` | Verify/TOC hashing |
 | `thiserror` | Errors (three variants mapping to the exit codes) |
 | `eframe`/`egui`, `rfd` | GUI toolkit + native file dialogs |
+| `egui_extras` | GUI slot table (resizable columns) |
 | `notify` | GUI watch of image directories (live Write-button state) |
+| `tempfile` (dev) | File-backed device fixtures in the test suites |
 
 No existing crate cleanly wraps the Windows lock/dismount dance; the ~300-line
 platform layer is owned in-tree.
@@ -447,9 +565,8 @@ subprocess using `--json` mode, which yields three properties for the price of o
 - **Guaranteed parity.** Every GUI action is by construction expressible as a CLI
   command; the GUI can display the equivalent command line (shown when the
   "Developer mode" setting is enabled — good for learning and bug reports).
-- **Loose coupling.** The JSON event schema (plan, progress {bytes, total,
-  slot}, result, error) is the only contract; GUI and CLI can evolve
-  independently and the schema is versioned.
+- **Loose coupling.** The JSON event schema is the only contract; GUI and CLI
+  can evolve independently. It is versioned (§8.1.1) and additive.
 
 One wrinkle: elevated subprocesses on Windows can't inherit stdout pipes across
 the UAC boundary. The CLI therefore also supports `--json-port 127.0.0.1:<n>`
@@ -457,12 +574,41 @@ the UAC boundary. The CLI therefore also supports `--json-port 127.0.0.1:<n>`
 when pipe inheritance is unavailable. macOS `osascript` returns output only on
 completion, so the port channel is used there for live progress as well.
 
+#### 8.1.1 The event schema
+
+One line of JSON per event, tagged by an `"event"` field (snake_case). The
+current version is **`EVENT_SCHEMA_VERSION = 2`**, carried in the `plan`
+event's `schema` field — the first event of every operation, so a consumer
+learns the version before anything else arrives.
+
+| `event` | Fields | Meaning |
+|---|---|---|
+| `plan` | `schema`, `device`, `sector_size`, `ops[]` | First event of every operation. Each `ops[]` entry is `{op, bank, unit, offset, bytes, image?}` — the exact byte ranges the plan will touch. |
+| `phase_start` | `op`, `bytes` | A pass is starting and will transfer `bytes` in total. A verified multi-slot write emits one for the write pass and a second for the verify pass. |
+| `slot_start` | `op`, `bank`, `unit`, `bytes` | One slot's transfer begins. |
+| `progress` | `bank`, `unit`, `bytes_done`, `bytes_total` | Periodic within a slot. |
+| `slot_end` | `op`, `bank`, `unit`, `ok`, `detail?` | One slot finished; emitted uniformly for every slot, status hashing included. |
+| `slot_status` | `bank`, `unit`, `state`, `name?`, `length?`, `sha256?` | A `status` scan's finding. `state` is `unknown` \| `matches` \| `modified` \| `differs` \| `wiped` (§4). |
+| `device` | `path`, `model`, `bus`, `size_bytes?`, `removable?`, `system` | One entry of `sdslot list`. |
+| `note` | `message` | A human-readable side note that is neither a slot outcome nor an error — e.g. the post-write eject result. |
+| `error` | `message` | Operation failed. |
+| `done` | `ok`, `detail?` | Last event of every operation. |
+
+`op` is `write` \| `read` \| `wipe` \| `verify` \| `status`. Optional fields are
+omitted entirely rather than serialized as `null`.
+
+Versioning rules: the constant is bumped only for an *incompatible* change.
+Adding a variant is additive — `note` was added under v2, because a consumer
+that does not recognize the tag drops the line harmlessly. v2 itself was a
+break: it introduced `phase_start` and made `slot_end` uniform across every
+operation, so a v1 consumer's per-slot progress accounting would misreport.
+
 ### 8.2 Toolkit choice
 
-**egui/eframe** is the recommended toolkit: pure Rust, statically linked, one
-~5 MB binary per platform, no webview or system toolkit dependencies, trivially
-cross-compiled in the same CI matrix as the CLI. The GUI's needs are modest
-(lists, buttons, progress bars, a slot map), well within immediate-mode comfort.
+**egui/eframe**: pure Rust, statically linked, one ~5 MB binary per platform,
+no webview or system toolkit dependencies, trivially cross-compiled in the same
+CI matrix as the CLI. The GUI's needs are modest (lists, buttons, progress
+bars, a slot map), well within immediate-mode comfort.
 
 The visual design (a `theme` module, the single home of everything visual) is
 an iOS-inspired dark language: card-based sections with rounded corners and
@@ -504,8 +650,8 @@ A card map at the top of the slot area draws the whole card to scale: each
 bank at its offset with per-slot cells (dark = occupied, light = free; a
 fill-fraction bar when slots are subpixel), the TOC as an orange tick, and
 hover tooltips naming the region. The reference length is the selected
-card's real capacity — refreshed automatically by the hotplug poller when a
-card is inserted or swapped — or a generic 8 GB card when none is selected,
+card's real capacity — refreshed automatically on hotplug when a card is
+inserted or swapped — or a generic 8 GB card when none is selected,
 so the user can judge what size card the layout needs. Overflowing a real
 card paints the excess red with an error caption; outgrowing the generic
 reference shows orange sizing guidance ("use a 16 GB card or larger").
@@ -543,16 +689,38 @@ fill/stroke so disabled ones (flat, faded) are visually unmistakable.
 Each slot row carries a selection checkbox (a bank-master checkbox in the
 table header ticks/unticks a whole bank; global All/None buttons cover the
 card). Loading a manifest auto-ticks every slot whose image exists on disk.
+A third "Needed" button — and, with "Select only what needs writing"
+enabled (the default), a completed status scan itself —
+narrows the selection to the slots with an image that the scan did *not*
+report as matching, so the following "Write Selected…" writes only what the
+card is missing. A canceled or failed scan leaves it alone: its unscanned
+rows would all read as needing a write. What "matches" measures is the scan's
+comparison, and for a slot the TOC records that is the hash of what was last
+written there, not the current image file — restaging different content under
+the same image path still reads as matching, and such a slot must be ticked
+by hand.
 The batch actions operate on the selection: "Write Selected…" writes the
 ticked slots' images in one confirmed `write` invocation (one elevation
 prompt, per-slot progress, verified) with explicit `--slot` arguments, so
 the CLI validates only the checked slots; missing image files are flagged
 in the preview and skipped on confirmation with their slots untouched,
-while ticked slots with no image are noted and ignored. "Extract
+while ticked slots with no image are noted and ignored. When "Eject disk
+after writing" is enabled (the default) and the target is a real removable
+device, the GUI passes `--eject` so the same elevated CLI invocation ejects
+the card after the write (and its verify pass) succeeds — no second
+elevation prompt — and reports the result as a `note` event in the log.
+"Extract
 Selected…" pulls the ticked slots into a chosen folder via `read
 --out-dir` (one invocation, generated filenames), and "Wipe Selected…"
 zeroes them via a multi-slot `wipe` after a confirmation listing every
 byte range.
+
+An Eject button next to the device selector (enabled whenever a real device
+is selected and no operation is running) runs `sdslot eject` so the card can
+be pulled without a write. Slot statuses are kept when the selection is lost
+(eject, unplug) — the last known state of the card that just left — but are
+cleared whenever a *different* target is selected, so a freshly inserted
+card is never displayed with the previous card's statuses.
 
 The device list mirrors the CLI's safety rails (§6): devices without media
 (empty card readers) are hidden unless "Show all devices" is enabled, and
@@ -566,8 +734,11 @@ never selectable, matching the CLI's refusal even with `--force`.
 A Settings window collects the persisted options — "Show all devices",
 "Advanced", "Select first removable disk at startup" (warning-gated: the
 first removable disk may not be the intended card), "Verify after write"
-(on by default), "Hide empty slots", "Hide log", and "Developer mode" —
-plus a "Reset all settings" button restoring the safe defaults.
+(on by default), "Eject disk after writing" (on by default; ejects the
+card after a successful Write Selected), "Select only what needs writing"
+(on by default; after a status refresh), "Hide empty slots", "Hide log",
+and "Developer mode" — plus a "Reset all settings" button restoring the
+safe defaults.
 
 A Cancel button beside the progress bar (enabled only while an operation
 runs) terminates the CLI subprocess — the direct child for unelevated
@@ -577,17 +748,31 @@ ends resolve honestly: an interrupted write/wipe shows differing, an
 interrupted verify falls back to written; the log advises re-running
 status.
 
+Beneath the progress area sits a **log pane**, styled as an 80's phosphor CRT:
+the bundled VT323 face (a faithful DEC VT320 terminal font, OFL-licensed, in
+`assets/fonts/`) rendered in classic P1 green, installed as a named egui font
+family with the stock fonts behind it so glyphs VT323 does not cover still
+render. The pane is drag-resizable and its height is persisted; "Hide log"
+collapses it entirely. Semantic status colors are shared with the rest of the
+UI, so the log's severity coloring matches the slot table's.
+
 Both binaries embed the git revision at build time: `--version` reports
 e.g. `0.1.0 (git 4a1322b9aeaa, dirty)` plus the copyright and repository
-link, and the GUI logs the same sign-on at startup. The GUI's window icon
-is drawn in code (an SD card with slot-state stripes) — no binary asset. Settings live in a TOML file `.sdslot` in the user's home
-directory and are written back on every change; the two dangerous options
-only take effect after their warning dialog is confirmed.
+link, and the GUI logs the same sign-on at startup. The GUI's *window* icon is
+drawn in code (an SD card with slot-state stripes) rather than loaded from a
+file; the only binary assets the crate commits are the VT323 font and the
+macOS bundle icon (`assets/sdslot.icns`, §8.4). Settings live in a TOML file
+`.sdslot` in the user's home directory and are written back on every change;
+the two dangerous options only take effect after their warning dialog is
+confirmed. Window size is persisted alongside them.
 
-The device list follows hotplug: a background poller re-enumerates every
-few seconds and updates the list when the device set changes (selection is
-tracked by device path, so it survives reordering and vanishes with an
-unplugged device). Enumeration happens in-process via `sdslot-core` — it is
+The device list follows hotplug: a background thread waits on the OS event
+source — `DiskArbitration` on macOS, `WM_DEVICECHANGE` on Windows, netlink
+kobject uevents on Linux, with a 15-second heartbeat alongside (and as the
+sole fallback where none of those can be opened) — and re-enumerates when
+it fires (selection is tracked by device path, so it survives reordering
+and vanishes with an unplugged device). Enumeration happens in-process via
+`sdslot-core` — it is
 metadata-only (no media reads, no elevation), so it does not breach the
 GUI's no-raw-I/O rule, and it avoids spawning the console-subsystem CLI,
 whose window would flash on every poll. All data-path operations still run
@@ -599,19 +784,84 @@ it writes a regular file). The layout manifest may be given on the command
 line (`sdslot-gui card.toml`, or `-m/--manifest card.toml`), so a layout can
 be associated with the GUI via shell shortcuts or file-manager "open with".
 
+### 8.4 macOS packaging: the `.app` bundle
+
+Distributing `sdslot-gui` as a bare executable makes the Full Disk Access
+requirement (§5.3) effectively unsatisfiable: TCC cannot hold a grant for
+something with no bundle identifier and no code signature, so authorization
+falls to whichever terminal launched the binary — invisible to the user, and
+wrong the moment they launch it another way.
+
+`sdslot-gui/macos/bundle.sh` therefore assembles a real bundle from the
+already-built binaries:
+
+```
+sdslot-gui.app/Contents/
+  Info.plist          # from Info.plist.in; @VERSION@ substituted
+  PkgInfo
+  MacOS/sdslot-gui    # the GUI
+  MacOS/sdslot        # the CLI — found as a sibling by backend.rs::cli_path
+  Resources/sdslot.icns
+```
+
+Design points:
+
+- **The CLI ships inside the bundle.** `cli_path()` looks for `sdslot` next to
+  the running executable, so `Contents/MacOS/` satisfies it with no code
+  change, and the elevated backend is always the matching build.
+- **`CFBundleIdentifier` is stable across releases.** TCC keys the grant by
+  identifier plus signature; changing it discards every user's authorization.
+- **Signing is nested-first.** `Contents/MacOS/sdslot` is signed before the
+  bundle (`codesign --deep` is deprecated and mis-signs inner Mach-O
+  binaries). The default is an ad-hoc signature, which is enough for TCC to
+  hold a grant but changes on every rebuild — so the grant must be re-added
+  after each one. `CODESIGN_IDENTITY` selects a Developer ID certificate for a
+  grant that survives rebuilds and updates.
+- **Numeric `CFBundleVersion`.** Release archives are also built from untagged
+  commits, whose "version" is a git hash; the hash goes in
+  `CFBundleShortVersionString` and `CFBundleVersion` falls back to `0.0.0`,
+  which macOS requires to be numeric-dotted.
+
+The bare binaries stay in the release archive alongside the bundle for CLI and
+terminal use.
+
 ---
 
 ## 9. Testing Strategy
 
-- **Loopback devices.** Linux CI runs full write/read/verify round-trips against
-  `losetup` loop devices.
-- **File-backed mode.** `--device file.img` (regular file, relaxed alignment) for
-  unit tests and for building full card images when that *is* desired.
-- **Golden layouts.** Manifest validation tested against good and deliberately
-  broken (overlapping banks, oversized images, non-power-of-two) layouts.
-- **JSON schema tests.** GUI event contract validated against recorded CLI output.
-- **Windows/macOS smoke checklist** on real SD cards: write rl:0 and rp:7,
-  verify, extract rp:7 with `--length canonical`, attach in a simulator, boot.
+The whole suite runs on any host with no hardware, no elevation, and no root:
+every data-path test targets a **file-backed device** (`--device file.img` —
+a regular file, growable, with relaxed alignment), which exercises the same
+engine code paths a real card does. `cargo test --workspace` is currently 111
+tests:
+
+| Suite | Tests | Covers |
+|---|---|---|
+| `sdslot-core` unit | 33 | Size parsing, the drive-type registry (including the stream types' lack of geometry), event round-tripping and the schema version, RTL identifier sanitizing, TOC encoding, the hotplug listener's startup signal |
+| `sdslot-core/tests/layout_tests.rs` | 19 | Manifest resolution against good and deliberately broken layouts: overlapping banks, oversized images, non-power-of-two slots, misaligned bases, stream types declared with geometry |
+| `sdslot-core/tests/engine_roundtrip.rs` | 12 | Write → read → verify round-trips, padding and chunk boundaries, wipe, status states, extraction lengths |
+| `sdslot-core/tests/device_tests.rs` | 4 | `RawDevice` contract on the file backend; eject refuses regular files |
+| `sdslot/tests/cli.rs` | 15 | Argument parsing, exit codes, and the `--json` event stream as the GUI actually consumes it |
+| `sdslot-gui` unit | 20 | Theme/palette invariants, settings persistence, operation-progress accounting |
+| `sdslot-core` doctests | 8 | The public library API as documented: manifest → slot extent → RTL export, size expressions, the registry, slot references, device-path classification |
+
+Gates: `.githooks/pre-commit` (opt in with `git config core.hooksPath
+.githooks`) runs fmt, clippy on the host, clippy on every installed cross
+target, then the tests. CI (`.github/workflows/release.yml`) runs the same
+fmt/clippy/test gate plus a clippy matrix over the Linux, macOS, and Windows
+targets — necessary because the device and elevation layers are `cfg`-gated,
+so a host-only lint sees just one platform's code.
+
+Not automated, and done by hand before a release:
+
+- **Real-hardware smoke checklist** on Windows/macOS/Linux with an actual SD
+  card: write rl:0 and rp:7, verify, extract rp:7 with `--length canonical`,
+  attach the result in a simulator, boot it. This is the only way to cover
+  elevation, volume locking/dismount, `O_EXCL`, macOS Full Disk Access, and
+  eject — none of which a file-backed target reaches.
+- **Loopback devices.** Running the round-trips against `losetup` devices in
+  Linux CI would automate the block-device path (though not elevation or the
+  Windows/macOS layers); it is not wired up today.
 
 ## 10. Future Work
 
@@ -623,3 +873,5 @@ be associated with the GUI via shell shortcuts or file-manager "open with".
 - Read-only "attach card slot directly in simulator" via a small block-device
   shim, skipping extraction entirely for quick boots.
 - GUI: manifest editor (create banks/slots graphically, export TOML + RTL).
+- Loopback (`losetup`) round-trips in Linux CI, to cover the real block-device
+  path automatically instead of only in the manual smoke checklist (§9).

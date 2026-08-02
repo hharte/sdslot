@@ -53,11 +53,6 @@ struct BankParams {
     slot_shift: u32,
     units: u32,
     units_width: u32,
-    /// Bit u set = slot u is POPULATED in the manifest (has an image).
-    /// The RTL uses this as the drive-presence mask so a machine cannot
-    /// advertise units the card does not carry — the same
-    /// generated-not-vendored rule as the addressing constants.
-    present: u64,
 }
 
 fn bank_params(layout: &Layout) -> Result<Vec<BankParams>> {
@@ -78,11 +73,6 @@ fn bank_params(layout: &Layout) -> Result<Vec<BankParams>> {
                 Some(t) => format!("{} x {}", t.name, b.units),
                 None => format!("{} units", b.units),
             };
-            let present = b
-                .slots
-                .values()
-                .filter(|sl| sl.image.is_some() && sl.unit < b.units)
-                .fold(0u64, |m, sl| m | (1u64 << sl.unit));
             Ok(BankParams {
                 prefix: sanitize_upper(&b.name),
                 comment: format!(
@@ -95,7 +85,6 @@ fn bank_params(layout: &Layout) -> Result<Vec<BankParams>> {
                 slot_shift: slots_per.trailing_zeros(),
                 units: b.units,
                 units_width: 32 - b.units.leading_zeros(),
-                present,
             })
         })
         .collect()
@@ -120,27 +109,39 @@ fn sanitize_upper(name: &str) -> String {
 
 /// Format a 32-bit hex constant with a `_` between the 16-bit halves,
 /// matching hand-written Verilog style: `0010_0000`.
-/// A `units`-wide binary literal, underscored every 4 bits from the LSB:
-/// `0b0011_1111`. Bit u = slot u populated.
-fn bin_mask(v: u64, units: u32) -> String {
-    let bits: String = (0..units)
-        .rev()
-        .map(|i| if v >> i & 1 == 1 { '1' } else { '0' })
-        .collect();
-    let mut out = String::new();
-    for (i, c) in bits.chars().enumerate() {
-        if i > 0 && (bits.len() - i).is_multiple_of(4) {
-            out.push('_');
-        }
-        out.push(c);
-    }
-    out
-}
-
 fn hex32(v: u64) -> String {
     format!("{:04x}_{:04x}", (v >> 16) & 0xffff, v & 0xffff)
 }
 
+/// Render `layout`'s per-bank addressing constants. `name` is the output
+/// file's stem, used for the SystemVerilog package name and the C include
+/// guard; it is ignored by the other formats.
+///
+/// ```
+/// use sdslot_core::layout::Layout;
+/// use sdslot_core::rtl::{export, RtlFormat};
+/// use std::path::Path;
+///
+/// let layout = Layout::from_toml(
+///     r#"
+///     sector_size = 512
+///
+///     [[bank]]
+///     name       = "rp"
+///     base       = "2GiB"
+///     slot_size  = "256MiB"
+///     units      = 8
+///     drive_type = "RP06"
+///     "#,
+///     Path::new("."),
+/// )?;
+///
+/// let vh = export(&layout, RtlFormat::Vh, "card_layout")?;
+/// assert!(vh.contains("localparam RP_BASE_LBA   = 32'h0040_0000;"));
+/// assert!(vh.contains("localparam RP_SLOT_SHIFT = 19;"));
+/// assert!(vh.contains("localparam RP_UNITS      = 4'd8;")); // minimum width
+/// # Ok::<(), sdslot_core::Error>(())
+/// ```
 pub fn export(layout: &Layout, format: RtlFormat, name: &str) -> Result<String> {
     let banks = bank_params(layout)?;
     let mut out = String::new();
@@ -185,15 +186,6 @@ pub fn export(layout: &Layout, format: RtlFormat, name: &str) -> Result<String> 
                         b.prefix, b.units_width, b.units
                     ),
                 );
-                push(
-                    &mut out,
-                    &format!(
-                        "localparam {}_PRESENT    = {}'b{};",
-                        b.prefix,
-                        b.units,
-                        bin_mask(b.present, b.units)
-                    ),
-                );
                 push(&mut out, "");
             }
             if format == RtlFormat::Sv {
@@ -223,14 +215,6 @@ pub fn export(layout: &Layout, format: RtlFormat, name: &str) -> Result<String> 
                     &mut out,
                     &format!("pub const {}_UNITS: u32 = {};", b.prefix, b.units),
                 );
-                push(
-                    &mut out,
-                    &format!(
-                        "pub const {}_PRESENT: u32 = 0b{};",
-                        b.prefix,
-                        bin_mask(b.present, b.units)
-                    ),
-                );
                 push(&mut out, "");
             }
         }
@@ -256,10 +240,6 @@ pub fn export(layout: &Layout, format: RtlFormat, name: &str) -> Result<String> 
                 push(
                     &mut out,
                     &format!("#define {}_UNITS      {}", b.prefix, b.units),
-                );
-                push(
-                    &mut out,
-                    &format!("#define {}_PRESENT    0x{:x}u", b.prefix, b.present),
                 );
                 push(&mut out, "");
             }
@@ -318,22 +298,6 @@ mod tests {
         );
         assert_eq!(RtlFormat::from_path(Path::new("x.txt")), None);
         assert_eq!(RtlFormat::from_path(Path::new("noext")), None);
-    }
-
-    #[test]
-    fn present_mask_is_lsb_first_and_underscored() {
-        // Bit u = slot u. The pdp11 card populates RP units 0..5 of 8,
-        // so the RTL must read 8'b0011_1111 -- eight ADDRESSABLE units,
-        // six drives installed. Getting the bit order backwards here
-        // would silently advertise the wrong drives.
-        assert_eq!(bin_mask(0b0011_1111, 8), "0011_1111");
-        assert_eq!(bin_mask(0b0000_0001, 8), "0000_0001");
-        assert_eq!(bin_mask(0b1000_0000, 8), "1000_0000");
-        // 16-wide (the RL bank) and a non-multiple-of-4 width.
-        assert_eq!(bin_mask(0b1, 16), "0000_0000_0000_0001");
-        assert_eq!(bin_mask(0b101, 3), "101");
-        // An empty bank is legal and must not panic.
-        assert_eq!(bin_mask(0, 4), "0000");
     }
 
     #[test]

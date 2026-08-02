@@ -20,7 +20,9 @@ use sdslot_core::units::format_bytes;
 
 use crate::backend::{self, RunningOp};
 use crate::devices::DeviceEntry;
-use crate::ops::{format_elapsed, LogMsg, OpFold, SlotOutcome, SlotUpdate, SlotView, ViewState};
+use crate::ops::{
+    format_elapsed, needs_write, LogMsg, OpFold, SlotOutcome, SlotUpdate, SlotView, ViewState,
+};
 use crate::settings::{settings_path, Settings};
 use crate::theme;
 
@@ -29,6 +31,10 @@ use crate::theme;
 struct OpState {
     running: RunningOp,
     fold: OpFold,
+    /// A status scan that should narrow the slot selection to what the card
+    /// still needs once it finishes cleanly. Cleared when applied, so the
+    /// per-frame poll doesn't keep overwriting the user's ticks afterwards.
+    select_needed_on_finish: bool,
 }
 
 /// One row of the "write all" confirmation: slot, source image, byte range.
@@ -294,7 +300,7 @@ impl App {
                 .iter()
                 .position(|d| d.has_media() && d.is_removable() && !d.system);
             if let Some(i) = first {
-                self.selected_device = Some(i);
+                self.set_target(Some(i), None);
                 let path = self.devices[i].path.clone();
                 self.log(format!("auto-selected removable disk: {path}"));
             }
@@ -408,6 +414,21 @@ impl App {
         self._watcher = Some(watcher);
     }
 
+    /// Change the write target. Slot statuses describe the card that was
+    /// scanned before, so switching to a different target — a freshly
+    /// inserted card in particular — clears them rather than presenting the
+    /// previous card's states as the new card's. Losing the selection
+    /// (eject, unplug) keeps them visible as the last known state.
+    fn set_target(&mut self, device: Option<usize>, file: Option<PathBuf>) {
+        let prev = self.device_arg();
+        self.selected_device = device;
+        self.file_device = file;
+        let now = self.device_arg();
+        if now.is_some() && now != prev {
+            self.slot_states.clear();
+        }
+    }
+
     fn device_arg(&self) -> Option<String> {
         if let Some(f) = &self.file_device {
             return Some(f.display().to_string());
@@ -466,6 +487,16 @@ impl App {
                 .is_some_and(|d| !d.is_removable())
     }
 
+    /// Eject after write applies only to real removable devices — never to
+    /// file targets or to non-removable disks selected in advanced mode.
+    fn target_ejectable(&self) -> bool {
+        self.file_device.is_none()
+            && self
+                .selected_device
+                .and_then(|i| self.devices.get(i))
+                .is_some_and(|d| d.is_removable())
+    }
+
     fn start_op(&mut self, cmd: backend::CliCommand) {
         let label = cmd.label();
         let running = backend::spawn_op(cmd);
@@ -477,6 +508,7 @@ impl App {
         self.op = Some(OpState {
             running,
             fold: OpFold::new(label),
+            select_needed_on_finish: false,
         });
     }
 
@@ -485,10 +517,54 @@ impl App {
             return;
         };
         self.slot_states.clear();
+        let narrow = self.settings.select_needed_after_status;
         self.start_op(backend::CliCommand::Status {
             device,
             manifest: Some(manifest),
         });
+        if let Some(op) = &mut self.op {
+            op.select_needed_on_finish = narrow;
+        }
+    }
+
+    /// Tick only the slots the card does not already hold: every slot whose
+    /// last scanned state is not "matches", restricted to slots that have an
+    /// image on disk to write. Run after a status refresh, this leaves
+    /// "Write Selected" writing exactly the slots that need it.
+    ///
+    /// "matches" is what the scan measured, and for a slot the card's TOC
+    /// records the scan compares the media against that TOC entry — the hash
+    /// of what was last written here — not against the image file. Restaging
+    /// different content under the same image path therefore still reads as
+    /// matching; tick such a slot by hand.
+    fn select_needed(&mut self) {
+        let Some(layout) = self.layout.clone() else {
+            return;
+        };
+        let mut selected = HashSet::new();
+        let mut up_to_date = 0;
+        for bank in &layout.banks {
+            for slot in bank.slots.values() {
+                let has_image = slot
+                    .image
+                    .as_ref()
+                    .is_some_and(|i| !self.missing_images.contains(i));
+                if !has_image || !self.slot_visible(bank, slot.unit) {
+                    continue;
+                }
+                let key = (bank.name.clone(), slot.unit);
+                if needs_write(self.slot_states.get(&key).map(|v| v.state)) {
+                    selected.insert(key);
+                } else {
+                    up_to_date += 1;
+                }
+            }
+        }
+        let count = selected.len();
+        self.selected_slots = selected;
+        self.log(format!(
+            "selection narrowed to {count} slot(s) needing a write ({up_to_date} already match)"
+        ));
     }
 
     /// The selected slots that name an image, with byte ranges — the preview
@@ -576,6 +652,19 @@ impl App {
                     ViewState::Busy(_) => ViewState::Core(SlotState::Differs),
                     other => other,
                 };
+            }
+            // A status refresh re-ticks the selection, once, and only when
+            // the scan actually completed: a canceled or failed scan leaves
+            // rows unscanned, and those would all read as needing a write.
+            let narrow = match &mut self.op {
+                Some(op) if op.select_needed_on_finish => {
+                    op.select_needed_on_finish = false;
+                    !op.fold.cancel_requested && op.fold.exit_code == Some(0)
+                }
+                _ => false,
+            };
+            if narrow {
+                self.select_needed();
             }
         }
         for msg in lines {
@@ -710,8 +799,7 @@ impl App {
                                 .add_enabled(selectable, egui::SelectableLabel::new(checked, label))
                                 .clicked()
                             {
-                                self.selected_device = Some(i);
-                                self.file_device = None;
+                                self.set_target(Some(i), None);
                             }
                         }
                         if shown == 0 {
@@ -720,6 +808,18 @@ impl App {
                     });
                 if ui.button("⟳").on_hover_text("Rescan devices").clicked() {
                     self.refresh_devices();
+                }
+                let can_eject =
+                    !self.busy() && self.file_device.is_none() && self.selected_device.is_some();
+                if ui
+                    .add_enabled(can_eject, egui::Button::new("Eject"))
+                    .on_hover_text("Eject the selected device so the card can be pulled safely")
+                    .on_disabled_hover_text("Select a device to eject")
+                    .clicked()
+                {
+                    if let Some(device) = self.device_arg() {
+                        self.start_op(backend::CliCommand::Eject { device });
+                    }
                 }
                 if ui.button("Settings…").clicked() {
                     self.settings_open = !self.settings_open;
@@ -733,8 +833,7 @@ impl App {
                         .set_title("Choose or create a card image file")
                         .save_file()
                     {
-                        self.file_device = Some(f);
-                        self.selected_device = None;
+                        self.set_target(None, Some(f));
                     }
                 }
             });
@@ -838,6 +937,16 @@ impl App {
                     .clicked()
                 {
                     self.selected_slots.clear();
+                }
+                if ui
+                    .add_enabled(have_layout, egui::Button::new("Needed"))
+                    .on_hover_text(
+                        "Tick only slots with an image that the last status scan \
+                         did not report as matching",
+                    )
+                    .clicked()
+                {
+                    self.select_needed();
                 }
                 ui.separator();
                 let can_batch = ready && count > 0;
@@ -1690,6 +1799,8 @@ impl App {
         let mut open = true;
         let mut show_all_changed = false;
         let mut verify_changed = false;
+        let mut eject_changed = false;
+        let mut select_needed_changed = false;
         let mut hide_empty_changed = false;
         let mut hide_log_changed = false;
         let mut developer_changed = false;
@@ -1746,6 +1857,22 @@ impl App {
                     &mut self.settings.verify,
                 );
 
+                eject_changed = theme::setting_row(
+                    ui,
+                    "Eject disk after writing",
+                    "Eject the removable disk after a successful Write Selected, \
+                     so the card can be pulled safely",
+                    &mut self.settings.eject_after_write,
+                );
+
+                select_needed_changed = theme::setting_row(
+                    ui,
+                    "Select only what needs writing",
+                    "After a status refresh, tick just the slots the scan did not \
+                     report as matching",
+                    &mut self.settings.select_needed_after_status,
+                );
+
                 hide_empty_changed = theme::setting_row(
                     ui,
                     "Hide empty slots",
@@ -1785,7 +1912,13 @@ impl App {
             self.prune_selection();
             self.save_settings();
         }
-        if verify_changed || hide_empty_changed || hide_log_changed || developer_changed {
+        if verify_changed
+            || eject_changed
+            || select_needed_changed
+            || hide_empty_changed
+            || hide_log_changed
+            || developer_changed
+        {
             self.save_settings();
         }
         if hide_empty_changed && self.settings.hide_empty_slots {
@@ -1967,6 +2100,7 @@ impl App {
                                 verify,
                                 yes: true,
                                 force: self.target_needs_force(),
+                                eject: false,
                             });
                         } else {
                             outcome = ModalOutcome::Close;
@@ -2020,6 +2154,7 @@ impl App {
             })
             .collect();
 
+        let eject = self.settings.eject_after_write && self.target_ejectable();
         let mut outcome = ModalOutcome::None;
         egui::Window::new("Confirm write selected")
             .collapsible(false)
@@ -2073,6 +2208,9 @@ impl App {
                     "Only the listed slots are touched; verify after write is \
                      disabled in Settings."
                 });
+                if eject {
+                    ui.label("The disk is ejected when the write completes.");
+                }
                 ui.separator();
                 ui.horizontal(|ui| {
                     let go_label = format!("Write {}", present.len());
@@ -2088,6 +2226,7 @@ impl App {
                                 verify,
                                 yes: true,
                                 force: self.target_needs_force(),
+                                eject,
                             });
                         } else {
                             outcome = ModalOutcome::Close;

@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 # A newer push to the same ref supersedes an in-flight run; release runs are
-# never cancelled and never queue behind the tag push that preceded them.
+# never canceled and never queue behind the tag push that preceded them.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
@@ -146,6 +146,13 @@ jobs:
             cp "$bin/sdslot.exe" "$bin/sdslot-gui.exe" "$dir/"
           else
             cp "$bin/sdslot" "$bin/sdslot-gui" "$dir/"
+          fi
+          # macOS ships the .app too: raw /dev/rdiskN access needs Full Disk
+          # Access, and TCC can only grant that to a bundle with an identifier
+          # and a signature. The bare binaries stay for CLI/terminal use.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            sdslot-gui/macos/bundle.sh --bin-dir "$bin" --out "$dir" \
+              --version "${{ steps.ver.outputs.version }}"
           fi
           cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
           cp -r examples "$dir/examples"

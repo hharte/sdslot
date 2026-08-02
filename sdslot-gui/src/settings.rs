@@ -21,6 +21,14 @@ pub struct Settings {
     /// Re-read and compare after every write. On by default; a missing
     /// field in an older settings file also reads as on.
     pub verify: bool,
+    /// Eject the disk after a successful "Write Selected" so the card can
+    /// be pulled safely. On by default; a missing field in an older
+    /// settings file also reads as on.
+    pub eject_after_write: bool,
+    /// After a status refresh, tick only the slots the scan did not report
+    /// as matching, so a following Write Selected writes just those. On by
+    /// default; a missing field in an older settings file also reads as on.
+    pub select_needed_after_status: bool,
     /// Hide slots with no content, name, or image from the slot map.
     pub hide_empty_slots: bool,
     /// Hide the log pane at the bottom of the window.
@@ -44,6 +52,8 @@ impl Default for Settings {
             advanced: false,
             select_first_removable: false,
             verify: true,
+            eject_after_write: true,
+            select_needed_after_status: true,
             hide_empty_slots: false,
             hide_log: false,
             developer_mode: false,
@@ -92,6 +102,8 @@ mod tests {
             advanced: false,
             select_first_removable: true,
             verify: false,
+            eject_after_write: false,
+            select_needed_after_status: false,
             hide_empty_slots: true,
             hide_log: false,
             developer_mode: false,
@@ -105,6 +117,8 @@ mod tests {
         assert!(!back.advanced);
         assert!(back.select_first_removable);
         assert!(!back.verify);
+        assert!(!back.eject_after_write);
+        assert!(!back.select_needed_after_status);
     }
 
     #[test]
@@ -114,6 +128,8 @@ mod tests {
         assert!(!d.advanced);
         assert!(!d.select_first_removable);
         assert!(d.verify);
+        assert!(d.eject_after_write);
+        assert!(d.select_needed_after_status);
         assert!(!d.hide_empty_slots);
         assert!(!d.hide_log);
         assert!(!d.developer_mode);
@@ -124,13 +140,17 @@ mod tests {
 
     #[test]
     fn missing_fields_fall_back_to_defaults() {
-        // An older settings file without the verify key must read as
-        // verify = on, and unknown keys must not break parsing.
+        // An older settings file without the verify or eject_after_write
+        // keys must read as on, and unknown keys must not break parsing.
         let back: Settings =
             toml::from_str("show_all = true\nfuture_option = 3\n").unwrap_or_default();
         assert!(back.verify);
+        assert!(back.eject_after_write);
+        assert!(back.select_needed_after_status);
         let empty: Settings = toml::from_str("").unwrap();
         assert!(!empty.advanced);
         assert!(empty.verify);
+        assert!(empty.eject_after_write);
+        assert!(empty.select_needed_after_status);
     }
 }

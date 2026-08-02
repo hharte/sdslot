@@ -301,6 +301,66 @@ drive_type = "RL02"
 }
 
 #[test]
+fn stream_bank_accepts_variable_lengths_and_reads_by_toc() {
+    let dir = tempfile::tempdir().unwrap();
+    // Two "reels" of unrelated sizes: stream media has no canonical length.
+    let reel0 = pattern(123_456, 6);
+    let reel1 = pattern(2_000_000, 7);
+    std::fs::write(dir.path().join("reel0.tap"), &reel0).unwrap();
+    std::fs::write(dir.path().join("reel1.tap"), &reel1).unwrap();
+    let layout = Layout::from_toml(
+        r#"
+toc = "8MiB"
+
+[[bank]]
+name = "ht"
+base = "16MiB"
+slot_size = "4MiB"
+units = 2
+drive_type = "TU45"
+
+  [[bank.slot]]
+  unit = 0
+  image = "reel0.tap"
+
+  [[bank.slot]]
+  unit = 1
+  image = "reel1.tap"
+"#,
+        dir.path(),
+    )
+    .unwrap();
+    let card = dir.path().join("card.img");
+    let jobs = engine::plan_writes(&layout, &[]).unwrap();
+    let mut dev = open_device(card.to_str().unwrap(), AccessMode::Write, 512).unwrap();
+    let mut session = engine::Session::new(dev.as_mut(), &layout).unwrap();
+
+    // No canonical-size warning for stream media, lax or strict.
+    let strict = EngineOpts {
+        strict_size: true,
+        ..small_chunks()
+    };
+    assert!(session.validate_writes(&jobs, &strict).unwrap().is_empty());
+    session.write_slots(&jobs, &strict, &mut NullSink).unwrap();
+
+    // canonical is refused; the default length is the TOC record (the
+    // reel's true byte length), not any nominal capacity.
+    let err = session
+        .resolve_length(0, 0, Some(LengthMode::Canonical))
+        .expect_err("stream media has no canonical length");
+    assert!(err.to_string().contains("stream"), "{err}");
+    assert_eq!(session.resolve_length(0, 0, None).unwrap(), 123_456);
+    assert_eq!(session.resolve_length(0, 1, None).unwrap(), 2_000_000);
+
+    let out = dir.path().join("out.tap");
+    let len = session.resolve_length(0, 1, None).unwrap();
+    session
+        .read_slot(0, 1, len, &out, &small_chunks(), &mut NullSink)
+        .unwrap();
+    assert_eq!(std::fs::read(&out).unwrap(), reel1);
+}
+
+#[test]
 fn flat_image_spans_full_layout() {
     let f = fixture();
     let opts = small_chunks();

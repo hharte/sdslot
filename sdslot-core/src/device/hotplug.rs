@@ -1,19 +1,25 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Cross-platform event-driven disk/media hotplug notifications.
+//! Hotplug notification for the GUI's device list: a signal whenever block
+//! storage is attached or detached, from the OS event source rather than a
+//! poll loop.
 //!
-//! Provides instant, event-driven detection when block storage devices (SD cards,
-//! USB drives) are connected or disconnected, eliminating polling overhead:
-//! - macOS: `DiskArbitration.framework` (DASession + CFRunLoop)
-//! - Windows: `WM_DEVICECHANGE` window messages & `RegisterDeviceNotificationW`
-//! - Linux: Netlink kobject uevents (`NETLINK_KOBJECT_UEVENT` socket)
-//! - Fallback: low-frequency heartbeat timer.
+//! - macOS: `DiskArbitration.framework` (DASession on a CFRunLoop)
+//! - Windows: `WM_DEVICECHANGE` on a message-only window
+//! - Linux: netlink kobject uevents (`NETLINK_KOBJECT_UEVENT`)
+//! - Anywhere else, or if the event source cannot be opened: a 15-second
+//!   heartbeat. The event-driven platforms also run the heartbeat alongside,
+//!   so a missed event self-corrects.
 
 use std::sync::mpsc::Sender;
 use std::thread::{self, JoinHandle};
 
-/// Spawns a background thread that listens for OS-level hotplug events and
-/// sends a signal on `tx` whenever a storage device is added or removed.
-/// An initial signal is sent on startup.
+/// Spawn a background thread that listens for OS-level hotplug events and
+/// sends a signal on `tx` whenever a storage device is added or removed. The
+/// signal carries no payload — the receiver re-enumerates. One signal is sent
+/// immediately, so the caller can populate its device list from the same path.
+///
+/// Returns `None` if the thread could not be spawned. The thread runs until
+/// the receiver is dropped.
 pub fn spawn_hotplug_listener(tx: Sender<()>) -> Option<JoinHandle<()>> {
     thread::Builder::new()
         .name("sdslot-hotplug".into())
@@ -55,6 +61,40 @@ mod fallback {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// The startup signal arrives on every platform without any device being
+    /// touched, so a caller can drive its first enumeration from the channel
+    /// alone. The listener thread itself needs real hardware events to say
+    /// anything more, which the manual smoke checklist covers.
+    #[test]
+    fn listener_signals_once_at_startup() {
+        let (tx, rx) = mpsc::channel();
+        // The thread parks in a platform event loop, so it is never joined;
+        // dropping the receiver is what eventually unblocks it.
+        let _handle = spawn_hotplug_listener(tx).expect("listener thread spawns");
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(10)),
+            Ok(()),
+            "no startup signal"
+        );
+    }
+
+    /// Dropping the receiver must not panic the listener: every send site
+    /// treats a closed channel as "stop".
+    #[test]
+    fn closed_receiver_is_not_an_error() {
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+        // The startup send fails silently rather than unwrapping.
+        let _handle = spawn_hotplug_listener(tx).expect("listener thread spawns");
     }
 }
 

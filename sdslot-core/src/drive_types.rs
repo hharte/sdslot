@@ -38,10 +38,15 @@ pub struct DriveType {
     pub name: String,
     pub geometry: Option<Geometry>,
     /// Canonical flat image size in bytes (what a simulator's attach/mount
-    /// command expects).
+    /// command expects). For stream types this is the nominal media capacity
+    /// (display/sizing only — stream images have no canonical size).
     pub image_bytes: u64,
     /// Recommended power-of-two slot size in bytes.
     pub recommended_slot: u64,
+    /// Byte-stream media (magtape): the slot holds a variable-length
+    /// container (e.g. SimH `.tap`), valid at any length up to the slot.
+    /// No geometry, no canonical-size validation, no `--length canonical`.
+    pub stream: bool,
 }
 
 const fn geom(cylinders: u32, heads: u32, sectors: u32, bytes_per_sector: u32) -> Geometry {
@@ -79,7 +84,38 @@ const BUILTIN: &[(&str, Geometry, u64)] = &[
     ("RP07", geom(630, 32, 50, 512), 1 << 30),
 ];
 
+/// Builtin byte-stream (magtape) types: no C/H/S geometry; the slot carries a
+/// variable-length `.tap` container. The size column is the NOMINAL media
+/// capacity — 2400 ft × 12 in/ft × 1600 B/in = 46,080,000 B for a 9-track
+/// reel at 1600 BPI PE (the TM02/TM03 ceiling) — used only for display and
+/// slot-sizing suggestions, never for image validation: inter-record gaps
+/// only lower the real capacity, while a gapless `.tap` may legally exceed
+/// it, so the only hard bound is the slot itself. TU16 and TU45 share media
+/// (the RP04/RP05 precedent); they differ in speed, not capacity.
+const STREAM_BUILTIN: &[(&str, u64, u64)] = &[
+    // name, nominal capacity, recommended slot
+    ("TU16", 46_080_000, 64 << 20),
+    ("TU45", 46_080_000, 64 << 20),
+];
+
 /// Case-insensitive drive type registry.
+///
+/// ```
+/// use sdslot_core::drive_types::Registry;
+///
+/// let reg = Registry::builtin();
+///
+/// let rl02 = reg.get("rl02").expect("builtin");        // lookup ignores case
+/// assert_eq!(rl02.image_bytes, 10_485_760);            // canonical image size
+/// assert_eq!(rl02.recommended_slot, 16 << 20);
+/// assert_eq!(rl02.geometry.unwrap().to_string(), "512c x 2h x 40s x 256B");
+///
+/// // Magtapes are stream media: no geometry and no canonical size, so the
+/// // slot is the only bound on a `.tap` image.
+/// let tu45 = reg.get("TU45").expect("builtin");
+/// assert!(tu45.stream);
+/// assert!(tu45.geometry.is_none());
+/// ```
 #[derive(Debug, Clone)]
 pub struct Registry {
     types: Vec<DriveType>,
@@ -95,7 +131,15 @@ impl Registry {
                     geometry: Some(g),
                     image_bytes: g.bytes(),
                     recommended_slot: slot,
+                    stream: false,
                 })
+                .chain(STREAM_BUILTIN.iter().map(|&(name, bytes, slot)| DriveType {
+                    name: name.to_string(),
+                    geometry: None,
+                    image_bytes: bytes,
+                    recommended_slot: slot,
+                    stream: true,
+                }))
                 .collect(),
         }
     }
@@ -156,7 +200,22 @@ mod tests {
                 "{name} image exceeds recommended slot"
             );
             assert!(t.recommended_slot.is_power_of_two(), "{name} slot not pow2");
+            assert!(!t.stream, "{name} is a disk type");
         }
+    }
+
+    #[test]
+    fn stream_types_have_no_geometry() {
+        let r = Registry::builtin();
+        for name in ["TU16", "TU45"] {
+            let t = r.get(name).unwrap_or_else(|| panic!("missing {name}"));
+            assert!(t.stream, "{name} is stream media");
+            assert!(t.geometry.is_none(), "{name} has no C/H/S geometry");
+            assert_eq!(t.image_bytes, 46_080_000, "{name} nominal capacity");
+            assert!(t.recommended_slot.is_power_of_two(), "{name} slot not pow2");
+            assert!(t.image_bytes <= t.recommended_slot, "{name} slot too small");
+        }
+        assert!(r.get("tu45").is_some(), "case-insensitive");
     }
 
     #[test]
@@ -177,6 +236,7 @@ mod tests {
             geometry: None,
             image_bytes: 42,
             recommended_slot: 64,
+            stream: false,
         });
         assert_eq!(r.get("RL02").unwrap().image_bytes, 42);
         assert_eq!(r.iter().count(), builtin_count); // replaced, not added
@@ -185,6 +245,7 @@ mod tests {
             geometry: None,
             image_bytes: 100,
             recommended_slot: 128,
+            stream: false,
         });
         assert_eq!(r.iter().count(), builtin_count + 1);
         assert_eq!(r.get("rk07").unwrap().image_bytes, 100);

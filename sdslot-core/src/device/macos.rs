@@ -21,12 +21,31 @@ pub struct MacDevice {
     capacity: u64,
 }
 
+/// EPERM on a raw disk device is macOS's TCC gate, not a credentials
+/// problem: the open already cleared the file-mode check (an unprivileged
+/// open of a `root:operator` device node fails with EACCES instead), and was
+/// then denied above the filesystem. Elevation cannot lift it — root does not
+/// bypass TCC — so "re-run with sudo" sends the user in circles, typically
+/// after they have already authenticated at the GUI's elevation prompt.
+fn full_disk_access_hint() -> String {
+    let prefix = if unsafe { libc::geteuid() } == 0 {
+        "already running as root — "
+    } else {
+        ""
+    };
+    format!(
+        "{prefix}macOS requires Full Disk Access for raw disk devices: grant it to the app that \
+         launched sdslot (sdslot-gui.app, Terminal, iTerm2, …) under System Settings > Privacy & \
+         Security > Full Disk Access, then quit and relaunch that app"
+    )
+}
+
 fn last_err(ctx: &str) -> Error {
     let e = io::Error::last_os_error();
-    let hint = if e.raw_os_error() == Some(libc::EACCES) || e.raw_os_error() == Some(libc::EPERM) {
-        format!(" ({})", super::elevation_hint())
-    } else {
-        String::new()
+    let hint = match e.raw_os_error() {
+        Some(libc::EPERM) => format!(" ({})", full_disk_access_hint()),
+        Some(libc::EACCES) => format!(" ({})", super::elevation_hint()),
+        _ => String::new(),
     };
     Error::Device(format!("{ctx}: {e}{hint}"))
 }
@@ -90,6 +109,26 @@ impl MacDevice {
             capacity: bcount * u64::from(bsize),
         })
     }
+}
+
+/// Eject the disk in `path` via `diskutil eject` — the supported way to
+/// offline removable media on macOS. The writing fd must already be closed
+/// so diskutil doesn't see the device as busy.
+pub fn eject(path: &str) -> Result<()> {
+    let name = disk_name(path).ok_or_else(|| {
+        Error::Validation(format!("bad device path {path:?}: expected /dev/rdiskN"))
+    })?;
+    let output = Command::new("diskutil")
+        .args(["eject", name])
+        .output()
+        .map_err(|e| Error::Device(format!("cannot run diskutil: {e}")))?;
+    if !output.status.success() {
+        return Err(Error::Device(format!(
+            "diskutil eject {name} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
 }
 
 impl Drop for MacDevice {

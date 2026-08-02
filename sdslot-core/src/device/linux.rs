@@ -16,6 +16,10 @@ use crate::error::{Error, Result};
 const BLKSSZGET: libc::c_ulong = 0x1268; // _IO(0x12, 104)
 const BLKGETSIZE64: libc::c_ulong = 0x8008_1272; // _IOR(0x12, 114, size_t)
 
+// <linux/cdrom.h>: the sd driver translates it to SCSI START STOP UNIT with
+// the load/eject bit for USB card readers and sticks — what eject(1) uses.
+const CDROMEJECT: libc::c_ulong = 0x5309;
+
 pub struct LinuxDevice {
     fd: libc::c_int,
     sector_size: u32,
@@ -81,6 +85,34 @@ impl LinuxDevice {
             capacity: size,
             ..dev
         })
+    }
+}
+
+/// Eject the media in `path`. The writing fd must already be closed (its
+/// `O_EXCL` claim and lock are gone with it); `O_NONBLOCK` opens the node
+/// without touching the media.
+pub fn eject(path: &str) -> Result<()> {
+    let cpath =
+        CString::new(path).map_err(|_| Error::Validation(format!("bad device path {path:?}")))?;
+    let fd = unsafe {
+        libc::open(
+            cpath.as_ptr(),
+            libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(last_err(&format!("cannot open {path} to eject it")));
+    }
+    let rc = unsafe { libc::ioctl(fd, CDROMEJECT as _) };
+    let err = if rc != 0 {
+        Some(last_err(&format!("cannot eject {path}")))
+    } else {
+        None
+    };
+    unsafe { libc::close(fd) };
+    match err {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
 }
 

@@ -159,6 +159,7 @@ pub enum CliCommand {
         verify: bool,
         yes: bool,
         force: bool,
+        eject: bool,
     },
     Read {
         device: String,
@@ -180,6 +181,9 @@ pub enum CliCommand {
         manifest: PathBuf,
         slots: Vec<String>,
     },
+    Eject {
+        device: String,
+    },
     Image {
         manifest: PathBuf,
         out: PathBuf,
@@ -198,6 +202,7 @@ impl CliCommand {
             CliCommand::Read { .. } => "read",
             CliCommand::Wipe { .. } => "wipe",
             CliCommand::Verify { .. } => "verify",
+            CliCommand::Eject { .. } => "eject",
             CliCommand::Image { .. } => "image",
         }
     }
@@ -209,7 +214,8 @@ impl CliCommand {
             | CliCommand::Write { device, .. }
             | CliCommand::Read { device, .. }
             | CliCommand::Wipe { device, .. }
-            | CliCommand::Verify { device, .. } => Some(device.as_str()),
+            | CliCommand::Verify { device, .. }
+            | CliCommand::Eject { device } => Some(device.as_str()),
         }
     }
 
@@ -231,6 +237,7 @@ impl CliCommand {
                 verify,
                 yes,
                 force,
+                eject,
             } => {
                 let mut args = vec![
                     "write".into(),
@@ -251,6 +258,9 @@ impl CliCommand {
                 }
                 if *force {
                     args.push("--force".into());
+                }
+                if *eject {
+                    args.push("--eject".into());
                 }
                 args
             }
@@ -330,6 +340,9 @@ impl CliCommand {
                     args.push(s.clone());
                 }
                 args
+            }
+            CliCommand::Eject { device } => {
+                vec!["eject".into(), "--device".into(), device.clone()]
             }
             CliCommand::Image {
                 manifest,

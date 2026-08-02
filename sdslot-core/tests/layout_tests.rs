@@ -382,6 +382,46 @@ fn rejects_bad_drive_type_definitions() {
          [[bank]]\nname=\"a\"\nbase=\"0\"\nslot_size=\"16MiB\"\nunits=1\n",
         "exceeds recommended_slot",
     );
+    // Stream types: geometry is contradictory; a bare `stream = true` needs
+    // at least a nominal size to register.
+    expect_reject(
+        "[drive_types.X]\nstream = true\ncylinders = 10\nheads = 1\nsectors = 10\n\
+         bytes_per_sector = 512\n\
+         [[bank]]\nname=\"a\"\nbase=\"0\"\nslot_size=\"16MiB\"\nunits=1\n",
+        "stream media has no C/H/S geometry",
+    );
+    expect_reject(
+        "[drive_types.X]\nstream = true\n\
+         [[bank]]\nname=\"a\"\nbase=\"0\"\nslot_size=\"16MiB\"\nunits=1\n",
+        "needs image_size or recommended_slot",
+    );
+}
+
+#[test]
+fn stream_drive_types_resolve() {
+    // Builtin TU45 on a bank; slot smaller than the nominal capacity is
+    // legal for stream media (the slot is the only bound).
+    let l = load(
+        "[[bank]]\nname=\"ht\"\nbase=\"0\"\nslot_size=\"16MiB\"\nunits=2\n\
+         drive_type = \"TU45\"\n",
+    );
+    let dt = l.banks[0].drive_type.as_ref().unwrap();
+    assert!(dt.stream);
+    assert!(dt.geometry.is_none());
+    assert!(
+        dt.image_bytes > 16 << 20,
+        "nominal capacity exceeds the slot"
+    );
+
+    // Manifest-defined stream type from recommended_slot alone.
+    let l = load(
+        "[drive_types.TK50]\nstream = true\nrecommended_slot = \"128MiB\"\n\
+         [[bank]]\nname=\"mu\"\nbase=\"0\"\nslot_size=\"128MiB\"\nunits=1\n\
+         drive_type = \"TK50\"\n",
+    );
+    let dt = l.banks[0].drive_type.as_ref().unwrap();
+    assert!(dt.stream);
+    assert_eq!(dt.image_bytes, 128 << 20);
 }
 
 #[test]

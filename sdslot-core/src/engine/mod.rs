@@ -533,7 +533,10 @@ impl<'a> Session<'a> {
             }
             let bank = self.layout.bank(&job.bank).expect("job bank exists");
             if let Some(dt) = &bank.drive_type {
-                if job.image_len != dt.image_bytes {
+                // Stream media (magtape .tap) has no canonical size: any
+                // length that fits the slot is valid, and the slot-fit check
+                // above already ran.
+                if !dt.stream && job.image_len != dt.image_bytes {
                     let msg = format!(
                         "image {} is {} bytes but the canonical {} image is {} bytes",
                         job.image.display(),
@@ -718,6 +721,13 @@ impl<'a> Session<'a> {
                 ))
             })?,
             Some(LengthMode::Canonical) => match &drive_type {
+                Some(dt) if dt.stream => {
+                    return Err(Error::Validation(format!(
+                        "--length canonical: {} is stream media with no canonical \
+                         size; use --length toc or --length slot",
+                        dt.name
+                    )))
+                }
                 Some(dt) => dt.image_bytes,
                 None => {
                     return Err(Error::Validation(format!(
@@ -726,11 +736,13 @@ impl<'a> Session<'a> {
                 }
             },
             Some(LengthMode::Slot) => extent.len,
-            // Default: canonical when the bank has a drive_type, else the
-            // TOC record if one exists, else the full slot.
+            // Default: canonical when the bank has a fixed-size drive_type,
+            // else the TOC record if one exists, else the full slot. Stream
+            // media takes the TOC/slot path — its images have no canonical
+            // size, only the length actually written.
             None => match &drive_type {
-                Some(dt) => dt.image_bytes,
-                None => toc_len(self)?.unwrap_or(extent.len),
+                Some(dt) if !dt.stream => dt.image_bytes,
+                _ => toc_len(self)?.unwrap_or(extent.len),
             },
         };
         if len > extent.len {

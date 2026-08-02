@@ -63,6 +63,8 @@ struct RawDriveType {
     heads: Option<u32>,
     sectors: Option<u32>,
     bytes_per_sector: Option<u32>,
+    /// Byte-stream media (magtape): variable-length images, no geometry.
+    stream: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +133,19 @@ pub struct SlotRef {
 
 impl SlotRef {
     /// Parse "rl:1" or "1".
+    ///
+    /// ```
+    /// use sdslot_core::layout::SlotRef;
+    ///
+    /// let r = SlotRef::parse("rl:1")?;
+    /// assert_eq!(r.bank.as_deref(), Some("rl"));
+    /// assert_eq!(r.unit, 1);
+    ///
+    /// // The bank prefix may be omitted when the manifest has a single bank.
+    /// assert_eq!(SlotRef::parse("7")?.bank, None);
+    /// assert!(SlotRef::parse("rl:").is_err());
+    /// # Ok::<(), sdslot_core::Error>(())
+    /// ```
     pub fn parse(s: &str) -> Result<SlotRef> {
         let bad = || Error::Validation(format!("bad slot reference {s:?}: expected [bank:]unit"));
         match s.rsplit_once(':') {
@@ -202,6 +217,28 @@ impl Layout {
         Layout::from_toml(&text, &base_dir)
     }
 
+    /// Parse and validate a manifest from TOML text; relative image paths in
+    /// it resolve against `base_dir`.
+    ///
+    /// ```
+    /// use sdslot_core::layout::Layout;
+    /// use std::path::Path;
+    ///
+    /// // A bank's base must be aligned to its power-of-two span unless the
+    /// // manifest sets `allow_unaligned`.
+    /// let err = Layout::from_toml(
+    ///     r#"
+    ///     [[bank]]
+    ///     name      = "rp"
+    ///     base      = "1MiB"
+    ///     slot_size = "256MiB"
+    ///     units     = 8
+    ///     "#,
+    ///     Path::new("."),
+    /// )
+    /// .expect_err("1 MiB is not a 2 GiB boundary");
+    /// assert!(err.to_string().contains("align"));
+    /// ```
     pub fn from_toml(text: &str, base_dir: &Path) -> Result<Layout> {
         let raw: RawManifest = toml::from_str(text)
             .map_err(|e| Error::Validation(format!("manifest parse error: {e}")))?;
@@ -305,6 +342,7 @@ fn resolve(raw: RawManifest, base_dir: &Path) -> Result<Layout> {
 
     let mut registry = Registry::builtin();
     for (name, rt) in &raw.drive_types {
+        let stream = rt.stream.unwrap_or(false);
         let geometry = match (rt.cylinders, rt.heads, rt.sectors, rt.bytes_per_sector) {
             (Some(c), Some(h), Some(s), Some(b)) => Some(Geometry {
                 cylinders: c,
@@ -319,9 +357,24 @@ fn resolve(raw: RawManifest, base_dir: &Path) -> Result<Layout> {
             )))
             }
         };
+        if stream && geometry.is_some() {
+            return Err(Error::Validation(format!(
+                "drive type {name:?}: stream media has no C/H/S geometry"
+            )));
+        }
         let image_bytes = match (&rt.image_size, geometry) {
             (Some(sz), _) => parse_size(sz, sector_size)?,
             (None, Some(g)) => g.bytes(),
+            // A stream type's image_size is only a nominal capacity; default
+            // it to the recommended slot when only that is given.
+            (None, None) if stream => match &rt.recommended_slot {
+                Some(sz) => parse_size(sz, sector_size)?,
+                None => {
+                    return Err(Error::Validation(format!(
+                        "stream drive type {name:?} needs image_size or recommended_slot"
+                    )))
+                }
+            },
             (None, None) => {
                 return Err(Error::Validation(format!(
                     "drive type {name:?} needs image_size or a full geometry"
@@ -344,6 +397,7 @@ fn resolve(raw: RawManifest, base_dir: &Path) -> Result<Layout> {
             geometry,
             image_bytes,
             recommended_slot,
+            stream,
         });
     }
 
@@ -402,7 +456,9 @@ fn resolve(raw: RawManifest, base_dir: &Path) -> Result<Layout> {
                 None => None,
             };
         if let Some(dt) = &drive_type {
-            if dt.image_bytes > slot_size {
+            // Stream media has no canonical image size — the slot itself is
+            // the only bound, so any slot_size is legal for a stream bank.
+            if !dt.stream && dt.image_bytes > slot_size {
                 return Err(Error::Validation(format!(
                     "{ctx}: slot_size {} is smaller than the {} canonical image ({})",
                     format_bytes(slot_size),

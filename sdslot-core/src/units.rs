@@ -6,6 +6,17 @@
 use crate::error::{Error, Result};
 
 /// Parse a size expression. `sector_size` scales the `s` (LBA) suffix.
+///
+/// ```
+/// use sdslot_core::units::parse_size;
+///
+/// assert_eq!(parse_size("4096", 512)?, 4096);       // plain bytes
+/// assert_eq!(parse_size("16MiB", 512)?, 16 << 20);
+/// assert_eq!(parse_size("3M", 512)?, 3 << 20);      // bare-letter shorthand
+/// assert_eq!(parse_size("2048s", 512)?, 1 << 20);   // LBAs x sector size
+/// assert!(parse_size("12XB", 512).is_err());
+/// # Ok::<(), sdslot_core::Error>(())
+/// ```
 pub fn parse_size(s: &str, sector_size: u32) -> Result<u64> {
     let t = s.trim();
     if t.is_empty() {
@@ -37,6 +48,15 @@ pub fn parse_size(s: &str, sector_size: u32) -> Result<u64> {
 }
 
 /// Render a byte count in the most compact exact binary unit.
+///
+/// ```
+/// use sdslot_core::units::format_bytes;
+///
+/// assert_eq!(format_bytes(16 << 20), "16 MiB");
+/// assert_eq!(format_bytes(512), "512 B");
+/// // Not a tidy multiple: approximated in the largest applicable unit.
+/// assert_eq!(format_bytes(31_914_983_424), "~29.72 GiB");
+/// ```
 pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [(u64, &str); 4] = [
         (1 << 40, "TiB"),

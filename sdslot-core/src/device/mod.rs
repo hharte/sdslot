@@ -76,6 +76,14 @@ pub trait RawDevice {
 }
 
 /// True when `path` names a platform raw device rather than a regular file.
+///
+/// ```
+/// use sdslot_core::device::is_platform_device_path;
+///
+/// assert!(is_platform_device_path(r"\\.\PhysicalDrive2"));
+/// assert!(is_platform_device_path("/dev/sdb"));
+/// assert!(!is_platform_device_path("card.img")); // a file-backed target
+/// ```
 pub fn is_platform_device_path(path: &str) -> bool {
     let p = path.trim();
     p.starts_with("\\\\.\\") || p.starts_with("//./") || p.starts_with("/dev/")
@@ -121,6 +129,37 @@ fn open_platform_device(_path: &str, _mode: AccessMode) -> Result<Box<dyn RawDev
     Err(crate::error::Error::Device(
         "raw device access is not supported on this platform".into(),
     ))
+}
+
+/// Eject removable media so the card can be pulled safely: media-removal
+/// IOCTLs on Windows, `CDROMEJECT` on Linux (the SCSI disk driver translates
+/// it to START STOP UNIT for USB readers), `diskutil eject` on macOS. The
+/// device must not be open — call this only after the writing handle is
+/// dropped.
+pub fn eject_device(path: &str) -> Result<()> {
+    if !is_platform_device_path(path) {
+        return Err(crate::error::Error::Validation(format!(
+            "{path} is a regular file, not an ejectable device"
+        )));
+    }
+    #[cfg(windows)]
+    {
+        windows::eject(path)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::eject(path)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::eject(path)
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    {
+        Err(crate::error::Error::Device(
+            "eject is not supported on this platform".into(),
+        ))
+    }
 }
 
 /// Enumerate candidate block devices (size, model, bus, removable flag).
@@ -189,5 +228,11 @@ mod tests {
     fn test_open_device_errors() {
         let res = open_device("", AccessMode::Read, 512);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn eject_rejects_regular_files() {
+        let err = eject_device("card.img").expect_err("file targets are not ejectable");
+        assert!(err.to_string().contains("not an ejectable device"));
     }
 }
